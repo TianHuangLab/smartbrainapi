@@ -17,67 +17,61 @@ const db = knex({
     }
   });
 
-const dataBase = {
-    users: [
-        {
-            id: '123',
-            name: 'john',
-            email: 'john@gmail.com',
-            password: 'cookies',
-            entries: 0,
-            joined: new Date(),
-        },
-        {
-            id: '124',
-            name: 'mike',
-            email: 'mike@gmail.com',
-            password: 'apples',
-            entries: 0,
-            joined: new Date(),
-        },
-        {
-            id: '125',
-            name: 'q',
-            email: 'q',
-            password: 'q',
-            entries: 0,
-            joined: new Date(),
-        }
-    ]
-    // login: [
-    //     {id: '123',
-    //     hash: '',
-    //     email: 'john@gmail.com'
-    //     }
-    // ]
-}
-
 app.get('/', (req, res) => {
     res.send(dataBase.users)
 })
 
 app.post('/signin', (req, res) => {
-    if (req.body.email === dataBase.users[0].email &&
-        req.body.password === dataBase.users[0].password) {
-            res.json(dataBase.users[0])
+    //find the user who is logging from the database
+    db.select('email','hash').from('login')
+    .where('email','=', req.body.email)
+    .then(data => {
+        //check if user's password is correct
+        const isValid = bcrypt.compareSync(req.body.password, data[0].hash);
+        if (isValid) {
+            //if it's correct, it returns the user info from table users as response
+            return db.select('*').from('users')
+            .where('email','=',req.body.email)
+            .then(user => {
+                res.json(user[0])
+            })
+            .catch(err => res.status(400).json('Unable to get user'))
         } else {
-            res.status(400).json('error logging in')
+            res.status(400).json('Wrong credentials')
         }
+    })
+    .catch(err => res.status(400).json('Unable to get user'))
 })
 
 app.post('/register', (req, res) => {
     //extract each items from the content of request in JSON format
     const {name, email, password} = req.body;
-    db('users')
-        .returning('*')
-        .insert({
-            name: name,
-            email: email,
-            joined: new Date()
-        }).then(user => {
-            res.json(user[0])
+    //hash out the password
+    const hash = bcrypt.hashSync(password);
+    //construct a transaction to ensure the consistency between users & login
+    db.transaction(trx => {
+        trx.insert({
+            hash: hash,
+            email: email
         })
-        .catch(err => res.status(400).json('Unable to register'))
+        .into('login')
+        .returning('email') //retrun the value from column email
+        .then(loginEmail => {
+            return trx('users') //go to users table
+            .returning('*') 
+            //select the whole table for inserting the corresponding info
+            .insert({
+                name: name,
+                email: loginEmail[0], //extract the user email from an array
+                joined: new Date()
+            }).then(user => {
+                res.json(user[0]) //respond with json
+            })
+        })
+        .then(trx.commit) //make sure all these changes get added into tables
+        .catch(trx.rollback) //in case anything fails, it can rollback
+    })
+    .catch(err => res.status(400).json('Unable to register'))
 })
 
 app.get('/profile/:id', (req, res) => {
